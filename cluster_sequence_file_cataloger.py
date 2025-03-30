@@ -12,6 +12,8 @@ from sklearn.cluster import DBSCAN
 from difflib import SequenceMatcher
 from collections import defaultdict, Counter
 from pathlib import Path
+import cv2
+import tempfile
 
 try:
     # Try to import sentence-transformers for embedding-based naming
@@ -32,7 +34,8 @@ except ImportError:
 IMAGE_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.gif', '.bmp', 
     '.webp', '.heic', '.heif', '.raw', '.svg', '.psd', 
-    '.cr2', '.crw', '.nef', '.arw', '.dng', '.orf', '.mp4', '.mov', '.c4d'
+    '.cr2', '.crw', '.nef', '.arw', '.dng', '.orf', 'c4d',
+    '.mp4', '.mov', '.mpg', '.mpeg', '.avi'  # Add video formats
 }
 
 def find_image_files(directory):
@@ -351,6 +354,130 @@ def derive_name_with_embeddings(tokens, cleaned_names, model_name="all-MiniLM-L6
     
     return "unnamed_sequence"
 
+def extract_frames_from_video(video_path, max_frames=60):
+    """
+    Extract frames from a video file for GIF creation.
+    
+    Args:
+        video_path: Path to the video file
+        max_frames: Maximum number of frames to extract
+    
+    Returns:
+        List of PIL Image objects
+    """
+    if not HAVE_PIL:
+        print(f"Cannot extract frames from {video_path}: PIL/Pillow library not available")
+        return []
+        
+    try:
+        # Open the video file
+        cap = cv2.VideoCapture(video_path)
+        
+        # Check if video opened successfully
+        if not cap.isOpened():
+            print(f"Error: Could not open video {video_path}")
+            return []
+        
+        # Get video properties
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Calculate step size to evenly sample frames
+        step = max(1, frame_count // max_frames)
+        
+        # Extract frames
+        frames = []
+        for i in range(0, frame_count, step):
+            if len(frames) >= max_frames:
+                break
+                
+            # Set the frame position
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ret, frame = cap.read()
+            
+            if ret:
+                # Convert BGR to RGB (PIL uses RGB)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Convert to PIL Image
+                pil_img = Image.fromarray(frame_rgb)
+                
+                # Resize if needed
+                pil_img.thumbnail((300, 300))
+                
+                frames.append(pil_img)
+        
+        # Release the video capture object
+        cap.release()
+        
+        return frames
+    
+    except Exception as e:
+        print(f"Error extracting frames from {video_path}: {e}")
+        return []
+
+def create_preview_gif(file_path, output_name, sequence_id):
+    """
+    Create a preview GIF for a file (either a video or part of an image sequence).
+    
+    Args:
+        file_path: Path to the file (video or image)
+        output_name: Base name for the output GIF
+        sequence_id: Unique ID of the sequence
+        
+    Returns:
+        Path to the created GIF file or None if creation failed
+    """
+    if not HAVE_PIL:
+        print(f"Cannot create GIF: PIL/Pillow library not available")
+        return None
+    
+    # Create output directory
+    unique_dir_name = f"{output_name}_{sequence_id}"
+    output_dir = os.path.join("seq_gifs", unique_dir_name)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Determine file type
+    ext = os.path.splitext(file_path.lower())[1]
+    is_video = ext in {'.mp4', '.mov', '.mpg', '.mpeg', '.avi'}
+    
+    frames = []
+    try:
+        if is_video:
+            # For video files, extract frames
+            frames = extract_frames_from_video(file_path)
+        else:
+            # For single images, just load the image
+            img = Image.open(file_path)
+            img.thumbnail((300, 300))
+            
+            # Convert to RGB if necessary
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+                
+            frames = [img]
+    
+        if not frames:
+            print(f"No frames generated for {file_path}")
+            return None
+    
+        # Save as GIF
+        output_path = os.path.join(output_dir, f"{output_name}_{sequence_id}.gif")
+        
+        # Save with a reasonable frame duration (100ms)
+        frames[0].save(
+            output_path,
+            format='GIF',
+            append_images=frames[1:],
+            save_all=True,
+            duration=100,  # milliseconds per frame
+            loop=0  # 0 means loop forever
+        )
+        print(f"Saved preview GIF to {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"Error creating GIF from {file_path}: {e}")
+        return None
+
 def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_frames=60, min_frames=20, max_dimension=300):
     """
     Create a preview GIF for a sequence with a large number of files.
@@ -396,16 +523,23 @@ def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_
     frames = []
     for file_path in selected_files:
         try:
-            img = Image.open(file_path)
+            ext = os.path.splitext(file_path.lower())[1]
+            is_video = ext in {'.mp4', '.mov', '.mpg', '.mpeg', '.avi'}
             
-            # Resize while maintaining aspect ratio
-            img.thumbnail((max_dimension, max_dimension))
-            
-            # Convert to RGB if necessary (for formats like PNG with alpha)
-            if img.mode == 'RGBA':
-                img = img.convert('RGB')
+            if is_video:
+                video_frames = extract_frames_from_video(file_path, max_frames=max_frames)
+                frames.extend(video_frames)
+            else:
+                img = Image.open(file_path)
                 
-            frames.append(img)
+                # Resize while maintaining aspect ratio
+                img.thumbnail((max_dimension, max_dimension))
+                
+                # Convert to RGB if necessary (for formats like PNG with alpha)
+                if img.mode == 'RGBA':
+                    img = img.convert('RGB')
+                    
+                frames.append(img)
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
     
@@ -432,79 +566,6 @@ def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_
         print(f"Error saving GIF for {sequence_name}: {e}")
         return None
 
-def prepare_json_output(root_path, all_images, sequences, clusters, unclustered, timing_data):
-    """Prepare JSON output with all required data."""
-    
-    # Create result dictionary
-    result = {
-        "metadata": {
-            "root_path": root_path,
-            "scan_date": datetime.datetime.now().isoformat(),
-            "total_images": len(all_images),
-            "total_clusters": len(clusters),
-            "total_sequences": len(sequences),
-            "unclustered_count": len(unclustered),
-            "timing": timing_data
-        },
-        "sequences": [],
-        "clusters": [],
-        "unclustered": []
-    }
-    
-    # Start timing GIF creation
-    start_gif_time = time.time()
-    
-    # Add sequences with AI-generated semantic names
-    for seq_id, files in sequences.items():
-        semantic_name = derive_sequence_name_ai(files)
-        print(f"Derived sequence name: {semantic_name} for {len(files)} files")
-        
-        # Create preview GIF for sequences with more than 30 files
-        preview_gif_path = None
-        if len(files) > 30 and HAVE_PIL:
-            # Create a safe filename version of the sequence name
-            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', semantic_name)
-            # Pass both the semantic name and the sequence ID
-            preview_gif_path = create_sequence_preview_gif(
-                files, 
-                safe_name,
-                seq_id.replace("/", "_").replace("\\", "_")  # Make seq_id safe for filenames
-            )
-        
-        seq_data = {
-            "id": seq_id,
-            "name": semantic_name,
-            "directory": os.path.dirname(files[0]) if files else "",
-            "count": len(files),
-            "files": [get_file_metadata(f) for f in files]
-        }
-        
-        # Add preview GIF path if available
-        if preview_gif_path:
-            seq_data["preview_gif"] = preview_gif_path
-            
-        result["sequences"].append(seq_data)
-    
-    # Record GIF creation time
-    gif_time = time.time() - start_gif_time
-    timing_data["gif_creation_seconds"] = gif_time
-    print(f"GIF creation completed in {gif_time:.2f} seconds")
-    
-    # Add clusters
-    for cluster_id, files in clusters.items():
-        cluster_data = {
-            "id": str(cluster_id),
-            "directory": os.path.dirname(files[0]) if files else "",
-            "count": len(files),
-            "files": [get_file_metadata(f) for f in files]
-        }
-        result["clusters"].append(cluster_data)
-    
-    # Add unclustered files
-    result["unclustered"] = [get_file_metadata(f) for f in unclustered]
-    
-    return result
-
 def main():
     parser = argparse.ArgumentParser(description='Cluster image files in a directory based on filename similarity')
     parser.add_argument('--directory', '-d', type=str, default='.', 
@@ -528,6 +589,32 @@ def main():
     if not image_files:
         print("No files found.")
         return
+    
+    # Create GIFs for video files
+    video_gifs = {}
+    video_files = []
+
+    for filepath in image_files:
+        ext = os.path.splitext(filepath.lower())[1]
+        if ext in {'.mp4', '.mov', '.mpg', '.mpeg', '.avi'}:
+            video_files.append(filepath)
+
+    print(f"Found {len(video_files)} video files for GIF creation")
+
+    for video_path in video_files:
+        # Create a safe filename version of the video name
+        basename = os.path.basename(video_path)
+        name_part = os.path.splitext(basename)[0]
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', name_part)
+        
+        # Use the full path hash as the sequence ID to ensure uniqueness
+        sequence_id = f"video_{abs(hash(video_path)) % 10000}"
+        
+        # Create GIF
+        gif_path = create_preview_gif(video_path, safe_name, sequence_id)
+        
+        if gif_path:
+            video_gifs[video_path] = gif_path
     
     # Track directory grouping time
     start_grouping_time = time.time()
@@ -565,18 +652,6 @@ def main():
     clustering_time = time.time() - start_clustering_time
     print(f"Clustering and sequence identification completed in {clustering_time:.2f} seconds")
     
-    # Track JSON preparation time
-    start_json_time = time.time()
-    
-    # Collect timing data
-    timing_data = {
-        "total_seconds": 0,  # Will be updated at the end
-        "file_discovery_seconds": discovery_time,
-        "directory_grouping_seconds": grouping_time,
-        "clustering_seconds": clustering_time,
-        "json_preparation_seconds": 0  # Will be updated after JSON preparation
-    }
-    
     # Display summary results to console
     print("\n=== SUMMARY ===")
     print(f"Total sequences: {len(all_sequences)}")
@@ -588,15 +663,93 @@ def main():
     print(f"Files in other clusters: {total_in_clusters}")
     print(f"Unclustered files: {len(all_unclustered)}")
     
-    # Prepare JSON output
-    json_data = prepare_json_output(
-        directory, 
-        image_files, 
-        all_sequences, 
-        all_clusters, 
-        all_unclustered,
-        timing_data
-    )
+    # Semantic name generation for sequences
+    start_naming_time = time.time()
+    sequence_names = {}
+    for seq_id, files in all_sequences.items():
+        sequence_names[seq_id] = derive_sequence_name_ai(files)
+        print(f"Derived sequence name: {sequence_names[seq_id]} for {len(files)} files")
+    naming_time = time.time() - start_naming_time
+    print(f"Sequence naming completed in {naming_time:.2f} seconds")
+    
+    # GIF creation as a separate step
+    start_gif_time = time.time()
+    preview_gifs = {}
+    
+    for seq_id, files in all_sequences.items():
+        if len(files) > 30 and HAVE_PIL:
+            # Create a safe filename version of the sequence name
+            semantic_name = sequence_names[seq_id]
+            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', semantic_name)
+            
+            # Pass both the semantic name and the sequence ID
+            gif_path = create_sequence_preview_gif(
+                files, 
+                safe_name,
+                seq_id.replace("/", "_").replace("\\", "_")
+            )
+            
+            if gif_path:
+                preview_gifs[seq_id] = gif_path
+    
+    gif_time = time.time() - start_gif_time
+    print(f"GIF creation completed in {gif_time:.2f} seconds")
+    
+    # Now prepare JSON (without GIF creation)
+    start_json_time = time.time()
+    
+    # Create result dictionary
+    json_data = {
+        "metadata": {
+            "root_path": directory,
+            "scan_date": datetime.datetime.now().isoformat(),
+            "total_images": len(image_files),
+            "total_clusters": len(all_clusters),
+            "total_sequences": len(all_sequences),
+            "unclustered_count": len(all_unclustered),
+            "timing": {
+                "total_seconds": 0,  # Will be updated at the end
+                "file_discovery_seconds": discovery_time,
+                "directory_grouping_seconds": grouping_time,
+                "clustering_seconds": clustering_time,
+                "sequence_naming_seconds": naming_time,
+                "gif_creation_seconds": gif_time,
+                "json_preparation_seconds": 0  # Will be updated after JSON preparation
+            }
+        },
+        "sequences": [],
+        "clusters": [],
+        "unclustered": []
+    }
+    
+    # Add sequences with AI-generated semantic names
+    for seq_id, files in all_sequences.items():
+        seq_data = {
+            "id": seq_id,
+            "name": sequence_names[seq_id],
+            "directory": os.path.dirname(files[0]) if files else "",
+            "count": len(files),
+            "files": [get_file_metadata(f) for f in files]
+        }
+        
+        # Add preview GIF path if available
+        if seq_id in preview_gifs:
+            seq_data["preview_gif"] = preview_gifs[seq_id]
+            
+        json_data["sequences"].append(seq_data)
+    
+    # Add clusters
+    for cluster_id, files in all_clusters.items():
+        cluster_data = {
+            "id": str(cluster_id),
+            "directory": os.path.dirname(files[0]) if files else "",
+            "count": len(files),
+            "files": [get_file_metadata(f) for f in files]
+        }
+        json_data["clusters"].append(cluster_data)
+    
+    # Add unclustered files
+    json_data["unclustered"] = [get_file_metadata(f) for f in all_unclustered]
     
     json_time = time.time() - start_json_time
     
