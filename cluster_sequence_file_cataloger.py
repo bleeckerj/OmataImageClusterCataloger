@@ -751,6 +751,21 @@ def main():
     # Add unclustered files
     json_data["unclustered"] = [get_file_metadata(f) for f in all_unclustered]
     
+    # Add video GIFs to the appropriate sections
+    for filepath, gif_path in video_gifs.items():
+        video_data = {
+            "id": f"video_{abs(hash(filepath)) % 10000}",
+            "name": os.path.splitext(os.path.basename(filepath))[0],
+            "directory": os.path.dirname(filepath),
+            "filepath": filepath,
+            "preview_gif": gif_path,
+            "metadata": get_file_metadata(filepath)
+        }
+        
+        if "videos" not in json_data:
+            json_data["videos"] = []
+        json_data["videos"].append(video_data)
+    
     json_time = time.time() - start_json_time
     
     # Update JSON preparation time in timing data
