@@ -6,7 +6,6 @@ import json
 import datetime
 import time
 import re
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import DBSCAN
 from difflib import SequenceMatcher
@@ -14,6 +13,7 @@ from collections import defaultdict, Counter
 from pathlib import Path
 import cv2
 import tempfile
+import numpy as np
 
 try:
     # Try to import sentence-transformers for embedding-based naming
@@ -415,7 +415,7 @@ def extract_frames_from_video(video_path, max_frames=60):
         print(f"Error extracting frames from {video_path}: {e}")
         return []
 
-def create_preview_gif(file_path, output_name, sequence_id):
+def create_preview_gif(file_path, output_name, sequence_id, base_output_dir):
     """
     Create a preview GIF for a file (either a video or part of an image sequence).
     
@@ -423,6 +423,7 @@ def create_preview_gif(file_path, output_name, sequence_id):
         file_path: Path to the file (video or image)
         output_name: Base name for the output GIF
         sequence_id: Unique ID of the sequence
+        base_output_dir: Base directory for output GIFs (e.g., seq_gifs/<leaf_dir>)
         
     Returns:
         Path to the created GIF file or None if creation failed
@@ -432,8 +433,7 @@ def create_preview_gif(file_path, output_name, sequence_id):
         return None
     
     # Create output directory
-    unique_dir_name = f"{output_name}_{sequence_id}"
-    output_dir = os.path.join("seq_gifs", unique_dir_name)
+    output_dir = os.path.join(base_output_dir, f"{output_name}_{sequence_id}")
     os.makedirs(output_dir, exist_ok=True)
     
     # Determine file type
@@ -478,7 +478,7 @@ def create_preview_gif(file_path, output_name, sequence_id):
         print(f"Error creating GIF from {file_path}: {e}")
         return None
 
-def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_frames=60, min_frames=20, max_dimension=300):
+def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, base_output_dir, max_frames=60, min_frames=20, max_dimension=300):
     """
     Create a preview GIF for a sequence with a large number of files.
     
@@ -486,6 +486,7 @@ def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_
         sequence_files: List of image files in the sequence
         sequence_name: Semantic name of the sequence
         sequence_id: Unique ID of the sequence
+        base_output_dir: Base directory for output GIFs (e.g., seq_gifs/<leaf_dir>)
         max_frames: Maximum number of frames to include in the GIF
         min_frames: Minimum number of frames to include in the GIF
         max_dimension: Maximum width or height in pixels
@@ -500,10 +501,7 @@ def create_sequence_preview_gif(sequence_files, sequence_name, sequence_id, max_
     import numpy as np
     
     # Create a unique directory name that includes both semantic name and sequence ID
-    unique_dir_name = f"{sequence_name}_{sequence_id}"
-    
-    # Create output directory if it doesn't exist
-    output_dir = os.path.join("seq_gifs", unique_dir_name)
+    output_dir = os.path.join(base_output_dir, f"{sequence_name}_{sequence_id}")
     os.makedirs(output_dir, exist_ok=True)
     
     # Determine number of frames to use
@@ -580,6 +578,11 @@ def main():
     directory = os.path.abspath(args.directory)
     print(f"Searching for files in: {directory}")
     
+    # Determine the base output directory for GIFs
+    leaf_dir = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(directory.rstrip('/')))
+    base_output_dir = os.path.join(f"{leaf_dir}_seq_gifs")
+    os.makedirs(base_output_dir, exist_ok=True)
+    
     # Track file discovery time
     start_discovery_time = time.time()
     image_files = find_image_files(directory)
@@ -611,7 +614,7 @@ def main():
         sequence_id = f"video_{abs(hash(video_path)) % 10000}"
         
         # Create GIF
-        gif_path = create_preview_gif(video_path, safe_name, sequence_id)
+        gif_path = create_preview_gif(video_path, safe_name, sequence_id, base_output_dir)
         
         if gif_path:
             video_gifs[video_path] = gif_path
@@ -686,7 +689,8 @@ def main():
             gif_path = create_sequence_preview_gif(
                 files, 
                 safe_name,
-                seq_id.replace("/", "_").replace("\\", "_")
+                seq_id.replace("/", "_").replace("\\", "_"),
+                base_output_dir
             )
             
             if gif_path:
@@ -779,7 +783,7 @@ def main():
     
     # Generate output filename with timestamp
     timestamp = datetime.datetime.now().strftime("%m%d%Y_%H%M%S")
-    output_file = args.output if args.output else f"files_clustering_{timestamp}.json"
+    output_file = args.output if args.output else f"{leaf_dir}_{timestamp}.json"
     
     # Save JSON output
     with open(output_file, 'w', encoding='utf-8') as f:

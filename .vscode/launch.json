@@ -10,7 +10,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": []
+            "args": [],
+            "python": "${workspaceFolder}/.venv/bin/python" // Update this path to your virtual environment's Python
         },
         {
             "name": "Debug Image Clustering",
@@ -18,7 +19,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/cluster_sequence_file_cataloger.py",
             "console": "integratedTerminal",
-            "args": ["--directory", "/Volumes/omata/C4D Projects and Renders/"]
+            "args": ["--directory", "/mnt/e/Dropbox (Personal)/Projects By Year/@2023/Magazine from the Future"],
+            "python": "${workspaceFolder}/.venv/bin/python" // Update this path to your virtual environment's Python
         }
     ]
 }
